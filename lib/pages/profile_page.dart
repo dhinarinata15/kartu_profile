@@ -8,13 +8,19 @@ class ProfilePage extends StatefulWidget {
   const ProfilePage({
     super.key,
     required this.prefs,
-    required this.isDark,
-    required this.onThemeChanged,
+    required this.themeMode,
+    required this.onThemeModeChanged,
+    required this.themeColor,
+    required this.onThemeColorChanged,
+    required this.onReplayOnboarding,
   });
 
   final PrefService prefs;
-  final bool isDark;
-  final ValueChanged<bool> onThemeChanged;
+  final ThemeMode themeMode;
+  final ValueChanged<ThemeMode> onThemeModeChanged;
+  final Color? themeColor;
+  final ValueChanged<Color?> onThemeColorChanged;
+  final VoidCallback onReplayOnboarding;
 
   @override
   State<ProfilePage> createState() => _ProfilePageState();
@@ -37,10 +43,124 @@ class _ProfilePageState extends State<ProfilePage> {
     if (result == null) return; // pengguna menekan back
 
     await widget.prefs.saveProfile(result);
+    // Tantangan 1: catat waktu terakhir diedit (ISO 8601)
+    await widget.prefs.setLastEditedAt(DateTime.now());
     if (!mounted) return;
     setState(() => _profile = result);
     ScaffoldMessenger.of(context)
         .showSnackBar(const SnackBar(content: Text('Profil tersimpan')));
+  }
+
+  Future<void> _reset() async {
+    await widget.prefs.clearProfile();
+    if (!mounted) return;
+    setState(() => _profile = widget.prefs.profile);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Profil dikembalikan ke bawaan')),
+    );
+  }
+
+  Future<void> _pickThemeMode() async {
+    final selected = await showDialog<ThemeMode>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('Mode Tema'),
+        children: [
+          RadioGroup<ThemeMode>(
+            groupValue: widget.themeMode,
+            onChanged: (value) => Navigator.pop(context, value),
+            child: Column(
+              children: [
+                for (final mode in ThemeMode.values)
+                  RadioListTile<ThemeMode>(
+                    title: Text(switch (mode) {
+                      ThemeMode.system => 'Ikuti Sistem',
+                      ThemeMode.light => 'Terang',
+                      ThemeMode.dark => 'Gelap',
+                    }),
+                    value: mode,
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+    if (selected != null) widget.onThemeModeChanged(selected);
+  }
+
+  Future<void> _pickThemeColor() async {
+    const choices = <String, Color>{
+      'Indigo (bawaan)': Colors.indigo,
+      'Biru': Colors.blue,
+      'Hijau': Colors.green,
+      'Merah': Colors.red,
+      'Oranye': Colors.orange,
+      'Ungu': Colors.purple,
+      'Teal': Colors.teal,
+    };
+    Color? selected;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Warna Tema'),
+        content: SingleChildScrollView(
+          child: RadioGroup<String>(
+            groupValue: _currentColorKey(choices),
+            onChanged: (value) => selected = choices[value!],
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final entry in choices.entries)
+                  RadioListTile<String>(
+                    title: Row(
+                      children: [
+                        CircleAvatar(radius: 12, backgroundColor: entry.value),
+                        const SizedBox(width: 12),
+                        Text(entry.key),
+                      ],
+                    ),
+                    value: entry.key,
+                  ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Batal'),
+          ),
+          FilledButton(
+            onPressed: () {
+              widget.onThemeColorChanged(selected);
+              Navigator.pop(context);
+            },
+            child: const Text('Pilih'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Mencocokkan warna aktif dengan daftar pilihan, null = pakai indigo.
+  String? _currentColorKey(Map<String, Color> choices) {
+    final current = widget.themeColor ?? Colors.indigo;
+    for (final entry in choices.entries) {
+      if (entry.value.toARGB32() == current.toARGB32()) return entry.key;
+    }
+    return null;
+  }
+
+  String _formatLastEdited(String? iso) {
+    if (iso == null) return 'Belum pernah diedit';
+    final dt = DateTime.tryParse(iso);
+    if (dt == null) return 'Belum pernah diedit';
+    final local = dt.toLocal();
+    final d = '${local.day}/${local.month}/${local.year}';
+    final h = local.hour.toString().padLeft(2, '0');
+    final m = local.minute.toString().padLeft(2, '0');
+    return 'Terakhir diedit: $d $h:$m';
   }
 
   @override
@@ -83,16 +203,48 @@ class _ProfilePageState extends State<ProfilePage> {
                   Text(_profile.title),
                   const SizedBox(height: 12),
                   Text(_profile.bio, textAlign: TextAlign.center),
+                  const SizedBox(height: 12),
+                  // Tantangan 1: waktu terakhir diedit
+                  Text(
+                    _formatLastEdited(widget.prefs.lastEditedAt),
+                    style: Theme.of(context).textTheme.bodySmall
+                        ?.copyWith(color: colors.onSurfaceVariant),
+                  ),
                 ],
               ),
             ),
           ),
           const SizedBox(height: 8),
-          SwitchListTile(
-            secondary: const Icon(Icons.dark_mode),
-            title: const Text('Mode Gelap'),
-            value: widget.isDark,
-            onChanged: widget.onThemeChanged,
+          // Tantangan 3: mode tema 3 pilihan + warna tema
+          ListTile(
+            leading: const Icon(Icons.brightness_6),
+            title: const Text('Mode Tema'),
+            subtitle: Text(switch (widget.themeMode) {
+              ThemeMode.system => 'Ikuti Sistem',
+              ThemeMode.light => 'Terang',
+              ThemeMode.dark => 'Gelap',
+            }),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _pickThemeMode,
+          ),
+          ListTile(
+            leading: const Icon(Icons.palette_outlined),
+            title: const Text('Warna Tema'),
+            trailing: CircleAvatar(
+              radius: 12,
+              backgroundColor: widget.themeColor ?? Colors.indigo,
+            ),
+            onTap: _pickThemeColor,
+          ),
+          OutlinedButton.icon(
+            onPressed: _reset,
+            icon: const Icon(Icons.restore),
+            label: const Text('Reset Profil'),
+          ),
+          OutlinedButton.icon(
+            onPressed: widget.onReplayOnboarding,
+            icon: const Icon(Icons.replay),
+            label: const Text('Lihat Onboarding Lagi'),
           ),
           // Lab 11 akan menambahkan menu "Proyek Saya" di sini.
           const SizedBox(height: 24),
